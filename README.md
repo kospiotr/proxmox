@@ -1,5 +1,6 @@
 # Kubernetes Talos
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/kospiotr/proxmox/main/k8s-talos-setup.sh)"
+https://raw.githubusercontent.com/kospiotr/proxmox/refs/heads/main/k8s-talos-setup-v1.sh
 ```
+
