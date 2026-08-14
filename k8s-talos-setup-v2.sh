@@ -9,7 +9,7 @@
 #   802  k8s-worker-01
 #   803  k8s-worker-02
 #
-# Resources per VM:
+# Per VM:
 #   2 vCPU
 #   4 GB RAM
 #   32 GB disk
@@ -17,29 +17,15 @@
 # Networking:
 #   DHCP
 #
-# Router/DNS:
+# DNS:
 #   k8s-master.home
 #   k8s-worker-01.home
 #   k8s-worker-02.home
 #
 # Run on a Proxmox node as root.
-#
-# The script:
-#   - asks for Talos version / ISO / talosctl URLs
-#   - checks/downloads the Talos ISO
-#   - checks/downloads talosctl
-#   - creates the Proxmox VMs
-#   - waits for DHCP + DNS
-#   - generates Talos configuration
-#   - installs Talos
-#   - bootstraps Kubernetes
-#   - downloads kubeconfig
-#   - verifies all Kubernetes nodes
-#
 # ============================================================
 
 set -Eeuo pipefail
-
 
 # ============================================================
 # DEFAULT CONFIGURATION
@@ -47,101 +33,74 @@ set -Eeuo pipefail
 
 DEFAULT_TALOS_VERSION="v1.13.3"
 
-#
-# IMPORTANT:
-#
-# The ISO URL depends on your Talos Image Factory schematic.
-#
-# Do NOT blindly use this URL unless it matches your schematic.
-#
+# Leave empty so the script explicitly asks for the URL.
+# Obtain the ISO URL from:
+# https://factory.talos.dev/
 DEFAULT_TALOS_ISO_URL=""
 
 DEFAULT_TALOSCTL_URL="https://github.com/siderolabs/talos/releases/download/${DEFAULT_TALOS_VERSION}/talosctl-linux-amd64"
 
-
-# ------------------------------------------------------------
-# Proxmox
-# ------------------------------------------------------------
+# ============================================================
+# PROXMOX CONFIGURATION
+# ============================================================
 
 STORAGE="local-lvm"
 ISO_STORAGE="local"
 BRIDGE="vmbr0"
 
-
-# ------------------------------------------------------------
+# ============================================================
 # VM IDs
-# ------------------------------------------------------------
+# ============================================================
 
 MASTER_VMID=801
 WORKER1_VMID=802
 WORKER2_VMID=803
 
-
-# ------------------------------------------------------------
-# VM resources
-# ------------------------------------------------------------
+# ============================================================
+# VM RESOURCES
+# ============================================================
 
 CORES=2
 MEMORY_MB=4096
 DISK_GB=32
 
-
-# ------------------------------------------------------------
-# Hostnames
-# ------------------------------------------------------------
+# ============================================================
+# DNS HOSTNAMES
+# ============================================================
 
 MASTER_HOST="k8s-master.home"
 WORKER1_HOST="k8s-worker-01.home"
 WORKER2_HOST="k8s-worker-02.home"
 
-
-# ------------------------------------------------------------
-# Kubernetes
-# ------------------------------------------------------------
+# ============================================================
+# KUBERNETES
+# ============================================================
 
 CLUSTER_NAME="proxmox-k8s"
 
-#
-# Single control-plane cluster.
-#
-Kubernetes API server will listen on:
-#
-#   https://k8s-master.home:6443
-#
 KUBERNETES_ENDPOINT="https://${MASTER_HOST}:6443"
 
-
-# ------------------------------------------------------------
-# Working directory
-# ------------------------------------------------------------
+# ============================================================
+# WORKING DIRECTORY
+# ============================================================
 
 WORK_DIR="/root/${CLUSTER_NAME}"
-
 CONFIG_DIR="${WORK_DIR}/talos"
-
 KUBECONFIG="${WORK_DIR}/kubeconfig"
-
 
 # ============================================================
 # DETERMINISTIC MAC ADDRESSES
-# ============================================================
 #
-# These are locally administered MAC addresses.
-#
-# Configure DHCP reservations in your router using these MACs:
+# Configure these in your router as DHCP reservations:
 #
 #   02:00:00:00:03:21 -> k8s-master.home
 #   02:00:00:00:03:22 -> k8s-worker-01.home
 #   02:00:00:00:03:23 -> k8s-worker-02.home
-#
-# They are deliberately fixed so the router reservations remain
-# valid if the VMs are recreated.
-#
+# ============================================================
 
 MASTER_MAC="02:00:00:00:03:21"
 WORKER1_MAC="02:00:00:00:03:22"
 WORKER2_MAC="02:00:00:00:03:23"
-
 
 # ============================================================
 # HELPERS
@@ -152,19 +111,16 @@ log() {
     echo "[$(date '+%H:%M:%S')] $*"
 }
 
-
 warn() {
     echo
     echo "WARNING: $*" >&2
 }
-
 
 die() {
     echo
     echo "ERROR: $*" >&2
     exit 1
 }
-
 
 ask_default() {
     local PROMPT="$1"
@@ -180,71 +136,35 @@ ask_default() {
     fi
 }
 
-
 command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
-
-
-# ============================================================
-# CLEANUP
-# ============================================================
-
-TMP_FILES=()
-
-cleanup() {
-    for file in "${TMP_FILES[@]:-}"; do
-        rm -f "$file" 2>/dev/null || true
-    done
-}
-
-trap cleanup EXIT
-
 
 # ============================================================
 # REQUIRE ROOT
 # ============================================================
 
-[[ "${EUID}" -eq 0 ]] \
-    || die "This script must be run as root on a Proxmox node."
-
+[[ "${EUID}" -eq 0 ]] || die "Run this script as root."
 
 # ============================================================
 # REQUIRE PROXMOX
 # ============================================================
 
-command_exists qm \
-    || die "The 'qm' command was not found. Run this on a Proxmox node."
-
-command_exists pvesm \
-    || die "The 'pvesm' command was not found."
-
+command_exists qm || die "The 'qm' command was not found."
+command_exists pvesm || die "The 'pvesm' command was not found."
 
 # ============================================================
-# BASIC COMMANDS
+# REQUIRE BASIC COMMANDS
 # ============================================================
 
-command_exists curl \
-    || die "curl is required."
-
-command_exists getent \
-    || die "getent is required."
-
-command_exists awk \
-    || die "awk is required."
-
-command_exists sed \
-    || die "sed is required."
-
-command_exists sha256sum \
-    || die "sha256sum is required."
-
+command_exists curl || die "curl is required."
+command_exists getent || die "getent is required."
+command_exists awk || die "awk is required."
+command_exists sha256sum || die "sha256sum is required."
 
 # ============================================================
 # HEADER
 # ============================================================
-
-clear || true
 
 echo
 echo "============================================================"
@@ -253,9 +173,9 @@ echo "============================================================"
 echo
 echo "This will create:"
 echo
-echo "  ${MASTER_VMID}  ${MASTER_HOST}"
-echo "  ${WORKER1_VMID}  ${WORKER1_HOST}"
-echo "  ${WORKER2_VMID}  ${WORKER2_HOST}"
+echo "  ${MASTER_VMID}  k8s-master"
+echo "  ${WORKER1_VMID}  k8s-worker-01"
+echo "  ${WORKER2_VMID}  k8s-worker-02"
 echo
 echo "Resources per VM:"
 echo
@@ -264,9 +184,8 @@ echo "  RAM : ${MEMORY_MB} MB"
 echo "  Disk: ${DISK_GB} GB"
 echo
 
-
 # ============================================================
-# TALOS VERSION
+# ASK TALOS VERSION
 # ============================================================
 
 TALOS_VERSION="$(
@@ -275,17 +194,18 @@ TALOS_VERSION="$(
         "${DEFAULT_TALOS_VERSION}"
 )"
 
-
 # ============================================================
-# TALOS ISO URL
+# ASK TALOS ISO URL
 # ============================================================
 
 echo
-echo "Talos ISO"
+echo "Talos ISO URL."
 echo
-echo "The ISO URL normally comes from the Talos Image Factory."
+echo "Generate/download an ISO from:"
 echo
-echo "Example:"
+echo "  https://factory.talos.dev/"
+echo
+echo "The URL normally looks like:"
 echo
 echo "  https://factory.talos.dev/image/<SCHEMATIC-ID>/${TALOS_VERSION}/metal-amd64.iso"
 echo
@@ -296,18 +216,16 @@ TALOS_ISO_URL="$(
         "${DEFAULT_TALOS_ISO_URL}"
 )"
 
-[[ -n "${TALOS_ISO_URL}" ]] \
-    || die "A Talos ISO URL is required."
-
+[[ -n "${TALOS_ISO_URL}" ]] || die "A Talos ISO URL is required."
 
 # ============================================================
-# TALOSCTL URL
+# ASK TALOSCTL URL
 # ============================================================
 
 DEFAULT_TALOSCTL_URL="https://github.com/siderolabs/talos/releases/download/${TALOS_VERSION}/talosctl-linux-amd64"
 
 echo
-echo "talosctl"
+echo "talosctl URL."
 echo
 echo "Default:"
 echo
@@ -320,9 +238,8 @@ TALOSCTL_URL="$(
         "${DEFAULT_TALOSCTL_URL}"
 )"
 
-
 # ============================================================
-# DISPLAY CONFIGURATION
+# SHOW CONFIGURATION
 # ============================================================
 
 echo
@@ -333,10 +250,10 @@ echo
 echo "Talos version:"
 echo "  ${TALOS_VERSION}"
 echo
-echo "Talos ISO:"
+echo "Talos ISO URL:"
 echo "  ${TALOS_ISO_URL}"
 echo
-echo "talosctl:"
+echo "talosctl URL:"
 echo "  ${TALOSCTL_URL}"
 echo
 echo "Proxmox storage:"
@@ -354,9 +271,11 @@ echo
 echo "============================================================"
 echo
 
+read -rp "Continue? [y/N] " CONFIRM
+[[ "${CONFIRM}" =~ ^[Yy]$ ]] || die "Installation cancelled."
 
 # ============================================================
-# ROUTER DHCP CONFIGURATION
+# ROUTER DHCP RESERVATIONS
 # ============================================================
 
 echo
@@ -364,62 +283,49 @@ echo "============================================================"
 echo "Router DHCP reservations"
 echo "============================================================"
 echo
-echo "Configure the following DHCP reservations in your router:"
+echo "Configure these MAC addresses in your router:"
 echo
-printf "  %-25s -> %s\n" \
-    "${MASTER_HOST}" \
-    "${MASTER_MAC}"
-
-printf "  %-25s -> %s\n" \
-    "${WORKER1_HOST}" \
-    "${WORKER1_MAC}"
-
-printf "  %-25s -> %s\n" \
-    "${WORKER2_HOST}" \
-    "${WORKER2_MAC}"
-
+echo "  ${MASTER_HOST}"
+echo "      MAC: ${MASTER_MAC}"
 echo
-echo "Your router should also provide DNS records for these names."
+echo "  ${WORKER1_HOST}"
+echo "      MAC: ${WORKER1_MAC}"
 echo
-echo "For example:"
+echo "  ${WORKER2_HOST}"
+echo "      MAC: ${WORKER2_MAC}"
+echo
+echo "Your router should also provide DNS for these names."
+echo
+echo "Example:"
 echo
 echo "  k8s-master.home       -> 192.168.1.80"
 echo "  k8s-worker-01.home    -> 192.168.1.81"
 echo "  k8s-worker-02.home    -> 192.168.1.82"
 echo
-echo "The actual IPs are up to your router."
+echo "The actual IP addresses are up to your router."
 echo
 echo "============================================================"
 echo
 
-
-read -rp "Have you configured the DHCP reservations and DNS? [y/N] " ANSWER
-
-[[ "${ANSWER}" =~ ^[Yy]$ ]] \
-    || die "Configure DHCP/DNS first."
-
+read -rp "Have you configured DHCP and DNS? [y/N] " ANSWER
+[[ "${ANSWER}" =~ ^[Yy]$ ]] || die "Configure DHCP/DNS first."
 
 # ============================================================
 # CHECK PROXMOX BRIDGE
 # ============================================================
 
-if ! ip link show "${BRIDGE}" >/dev/null 2>&1; then
+ip link show "${BRIDGE}" >/dev/null 2>&1 ||
     die "Proxmox bridge '${BRIDGE}' does not exist."
-fi
-
 
 # ============================================================
 # CHECK STORAGE
 # ============================================================
 
-if ! pvesm status --storage "${STORAGE}" >/dev/null 2>&1; then
+pvesm status --storage "${STORAGE}" >/dev/null 2>&1 ||
     die "Proxmox storage '${STORAGE}' is not available."
-fi
 
-if ! pvesm status --storage "${ISO_STORAGE}" >/dev/null 2>&1; then
+pvesm status --storage "${ISO_STORAGE}" >/dev/null 2>&1 ||
     die "Proxmox ISO storage '${ISO_STORAGE}' is not available."
-fi
-
 
 # ============================================================
 # TALOS ISO
@@ -427,19 +333,10 @@ fi
 
 ISO_FILENAME="$(basename "${TALOS_ISO_URL%%\?*}")"
 
-#
-# Prevent accidental weird filenames.
-#
-[[ "${ISO_FILENAME}" == *.iso ]] \
-    || die "The supplied URL does not appear to point to an .iso file:
-${TALOS_ISO_URL}"
+[[ "${ISO_FILENAME}" == *.iso ]] ||
+    die "The supplied URL does not appear to point to an ISO."
 
-
-#
-# Proxmox's normal local ISO path.
-#
 ISO_PATH="/var/lib/vz/template/iso/${ISO_FILENAME}"
-
 
 log "Checking Talos ISO..."
 
@@ -454,28 +351,23 @@ if [[ -f "${ISO_PATH}" ]]; then
 
 else
 
-    log "Talos ISO is not present."
+    log "Talos ISO not found."
 
     echo
-    echo "The following file will be downloaded:"
-    echo
-    echo "  ${ISO_PATH}"
-    echo
-    echo "From:"
+    echo "Downloading:"
     echo
     echo "  ${TALOS_ISO_URL}"
     echo
 
-    read -rp "Download it now? [Y/n] " DOWNLOAD_ISO
+    mkdir -p "$(dirname "${ISO_PATH}")"
+
+    read -rp "Download the ISO now? [Y/n] " DOWNLOAD_ISO
 
     if [[ "${DOWNLOAD_ISO}" =~ ^[Nn]$ ]]; then
         die "Talos ISO is required."
     fi
 
-    mkdir -p "$(dirname "${ISO_PATH}")"
-
     TMP_ISO="$(mktemp --suffix=.iso)"
-    TMP_FILES+=("${TMP_ISO}")
 
     curl \
         --fail \
@@ -484,41 +376,23 @@ else
         --output "${TMP_ISO}" \
         "${TALOS_ISO_URL}"
 
-    #
-    # Basic ISO sanity check.
-    #
-    file "${TMP_ISO}" 2>/dev/null \
-        | grep -qiE 'ISO|boot' \
-        || warn "Could not identify the downloaded file as an ISO. Continuing."
-
     mv "${TMP_ISO}" "${ISO_PATH}"
 
-    log "Talos ISO downloaded successfully."
+    log "Talos ISO downloaded."
 
 fi
-
 
 # ============================================================
-# VERIFY ISO THROUGH PROXMOX
+# REGISTER ISO WITH PROXMOX
 # ============================================================
 
-ISO=""
+ISO="${ISO_STORAGE}:iso/${ISO_FILENAME}"
 
-if [[ "${ISO_STORAGE}" == "local" ]]; then
-    ISO="local:iso/${ISO_FILENAME}"
-else
-    ISO="${ISO_STORAGE}:iso/${ISO_FILENAME}"
-fi
+pvesm path "${ISO}" >/dev/null 2>&1 ||
+    die "Proxmox cannot access ${ISO}"
 
-
-if ! pvesm path "${ISO}" >/dev/null 2>&1; then
-    die "Proxmox cannot access the ISO:
-${ISO}"
-fi
-
-log "Proxmox ISO:"
+log "Using Proxmox ISO:"
 echo "  ${ISO}"
-
 
 # ============================================================
 # TALOSCTL
@@ -528,7 +402,7 @@ if command_exists talosctl; then
 
     TALOSCTL_BIN="$(command -v talosctl)"
 
-    log "talosctl is already installed:"
+    log "talosctl already installed:"
     echo "  ${TALOSCTL_BIN}"
 
     echo
@@ -536,7 +410,7 @@ if command_exists talosctl; then
     echo
 
     read -rp \
-        "Use this existing talosctl installation? [Y/n] " \
+        "Use the existing talosctl installation? [Y/n] " \
         USE_EXISTING_TALOSCTL
 
     if [[ "${USE_EXISTING_TALOSCTL}" =~ ^[Nn]$ ]]; then
@@ -544,7 +418,6 @@ if command_exists talosctl; then
         log "Installing talosctl from supplied URL."
 
         TMP_TALOSCTL="$(mktemp)"
-        TMP_FILES+=("${TMP_TALOSCTL}")
 
         curl \
             --fail \
@@ -575,7 +448,6 @@ else
     echo
 
     TMP_TALOSCTL="$(mktemp)"
-    TMP_FILES+=("${TMP_TALOSCTL}")
 
     curl \
         --fail \
@@ -595,18 +467,10 @@ else
 
 fi
 
+command_exists talosctl || die "talosctl installation failed."
 
-# ============================================================
-# VERIFY TALOSCTL
-# ============================================================
-
-command_exists talosctl \
-    || die "talosctl installation failed."
-
-log "talosctl version:"
-
+log "talosctl client version:"
 talosctl version --client
-
 
 # ============================================================
 # KUBECTL
@@ -614,16 +478,12 @@ talosctl version --client
 
 if command_exists kubectl; then
 
-    log "kubectl already installed:"
-    kubectl version --client --output=yaml 2>/dev/null \
-        | head -20 || true
+    log "kubectl already installed."
 
 else
 
-    log "kubectl is not installed."
-
     echo
-    read -rp "Install kubectl automatically? [Y/n] " INSTALL_KUBECTL
+    read -rp "kubectl is missing. Install it? [Y/n] " INSTALL_KUBECTL
 
     if [[ ! "${INSTALL_KUBECTL}" =~ ^[Nn]$ ]]; then
 
@@ -638,7 +498,6 @@ else
         log "Installing kubectl ${KUBECTL_VERSION}..."
 
         TMP_KUBECTL="$(mktemp)"
-        TMP_FILES+=("${TMP_KUBECTL}")
 
         curl \
             --fail \
@@ -656,20 +515,15 @@ else
 
         rm -f "${TMP_KUBECTL}"
 
-    else
-
-        warn "kubectl will not be installed."
-
     fi
 
 fi
-
 
 # ============================================================
 # CHECK EXISTING VMS
 # ============================================================
 
-log "Checking existing VM IDs..."
+log "Checking VM IDs..."
 
 for VMID in \
     "${MASTER_VMID}" \
@@ -678,28 +532,22 @@ for VMID in \
 do
 
     if qm status "${VMID}" >/dev/null 2>&1; then
-
-        die "VM ${VMID} already exists.
-
-Refusing to modify or overwrite it."
-
+        die "VM ${VMID} already exists. Refusing to modify it."
     fi
 
 done
 
-
 # ============================================================
-# PREPARE WORK DIRECTORY
+# WORK DIRECTORY
 # ============================================================
 
 if [[ -d "${WORK_DIR}" ]]; then
 
     warn "Working directory already exists:"
-    echo
     echo "  ${WORK_DIR}"
     echo
 
-    read -rp "Remove it and start from scratch? [y/N] " REMOVE_WORKDIR
+    read -rp "Remove it and start again? [y/N] " REMOVE_WORKDIR
 
     if [[ "${REMOVE_WORKDIR}" =~ ^[Yy]$ ]]; then
         rm -rf "${WORK_DIR}"
@@ -711,9 +559,8 @@ fi
 
 mkdir -p "${CONFIG_DIR}"
 
-
 # ============================================================
-# CREATE VM
+# CREATE VM FUNCTION
 # ============================================================
 
 create_vm() {
@@ -747,7 +594,6 @@ create_vm() {
 
 }
 
-
 # ============================================================
 # CREATE VMS
 # ============================================================
@@ -767,7 +613,6 @@ create_vm \
     "k8s-worker-02" \
     "${WORKER2_MAC}"
 
-
 # ============================================================
 # START VMS
 # ============================================================
@@ -778,7 +623,6 @@ qm start "${MASTER_VMID}"
 qm start "${WORKER1_VMID}"
 qm start "${WORKER2_VMID}"
 
-
 # ============================================================
 # DNS RESOLUTION
 # ============================================================
@@ -787,19 +631,17 @@ resolve_ipv4() {
 
     local HOST="$1"
 
-    getent ahostsv4 "${HOST}" \
-        | awk 'NR==1 {print $1}'
+    getent ahostsv4 "${HOST}" |
+        awk 'NR==1 {print $1}'
 
 }
-
 
 wait_for_dns() {
 
     local HOST="$1"
-
-    log "Waiting for DNS/DHCP: ${HOST}"
-
     local IP=""
+
+    log "Waiting for DHCP/DNS: ${HOST}"
 
     for ((i=1; i<=120; i++)); do
 
@@ -807,10 +649,9 @@ wait_for_dns() {
 
         if [[ -n "${IP}" ]]; then
 
-            log "${HOST} resolved to ${IP}"
+            log "${HOST} -> ${IP}"
 
             echo "${IP}"
-
             return 0
 
         fi
@@ -819,29 +660,20 @@ wait_for_dns() {
 
     done
 
-    die "Unable to resolve ${HOST}.
-
-Check:
-
-  1. DHCP reservation
-  2. DNS record
-  3. VM network
-  4. Proxmox bridge ${BRIDGE}"
+    die "Unable to resolve ${HOST}."
 
 }
 
-
 # ============================================================
-# GET NODE IPs
+# RESOLVE NODE IPS
 # ============================================================
 
 MASTER_IP="$(wait_for_dns "${MASTER_HOST}")"
 WORKER1_IP="$(wait_for_dns "${WORKER1_HOST}")"
 WORKER2_IP="$(wait_for_dns "${WORKER2_HOST}")"
 
-
 # ============================================================
-# DISPLAY NETWORK
+# SHOW NETWORK
 # ============================================================
 
 echo
@@ -861,9 +693,8 @@ echo
 echo "============================================================"
 echo
 
-
 # ============================================================
-# WAIT FOR TALOS MAINTENANCE API
+# WAIT FOR TALOS API
 # ============================================================
 
 wait_for_port() {
@@ -872,7 +703,7 @@ wait_for_port() {
     local PORT="$2"
     local NAME="$3"
 
-    log "Waiting for ${NAME} (${IP}:${PORT})..."
+    log "Waiting for ${NAME} on ${IP}:${PORT}..."
 
     for ((i=1; i<=120; i++)); do
 
@@ -882,7 +713,6 @@ wait_for_port() {
         then
 
             log "${NAME} is reachable."
-
             return 0
 
         fi
@@ -891,10 +721,9 @@ wait_for_port() {
 
     done
 
-    die "${NAME} did not become reachable on ${IP}:${PORT}."
+    die "${NAME} did not become reachable."
 
 }
-
 
 wait_for_port \
     "${MASTER_IP}" \
@@ -911,63 +740,36 @@ wait_for_port \
     50000 \
     "Talos worker 02 API"
 
-
 # ============================================================
-# GET TALOS DISK
+# DETECT TALOS DISKS
 # ============================================================
-#
-# Talos maintenance mode exposes disks.
-#
-# We expect the Proxmox virtio/SCSI disk to be visible as:
-#
-#   /dev/sda
-#
-# However, instead of assuming it, query Talos.
-#
 
-log "Detecting Talos disks..."
+log "Detecting disks on the control-plane node..."
 
 talosctl get disks \
     --insecure \
     --nodes "${MASTER_IP}"
 
-
-# ============================================================
-# DEFAULT INSTALL DISK
-# ============================================================
-#
-# With the Proxmox SCSI disk created above, /dev/sda is normally
-# the correct target.
-#
-# If your Proxmox configuration exposes another disk, change
-# this value.
-#
+echo
+echo "The Proxmox VM uses one SCSI disk."
+echo "It should normally appear to Talos as /dev/sda."
+echo
 
 INSTALL_DISK="/dev/sda"
 
-echo
-echo "The generated Talos configuration will install Talos to:"
-echo
-echo "  ${INSTALL_DISK}"
-echo
-
-
 read -rp \
-    "Use ${INSTALL_DISK} as the Talos installation disk? [Y/n] " \
-    INSTALL_DISK_CONFIRM
+    "Talos installation disk [${INSTALL_DISK}]: " \
+    CUSTOM_INSTALL_DISK
 
-if [[ "${INSTALL_DISK_CONFIRM}" =~ ^[Nn]$ ]]; then
-
-    read -rp "Enter Talos installation disk: " INSTALL_DISK
-
+if [[ -n "${CUSTOM_INSTALL_DISK}" ]]; then
+    INSTALL_DISK="${CUSTOM_INSTALL_DISK}"
 fi
 
-[[ "${INSTALL_DISK}" == /dev/* ]] \
-    || die "Invalid installation disk: ${INSTALL_DISK}"
-
+[[ "${INSTALL_DISK}" == /dev/* ]] ||
+    die "Invalid installation disk: ${INSTALL_DISK}"
 
 # ============================================================
-# GENERATE TALOS CONFIG
+# GENERATE TALOS CONFIGURATION
 # ============================================================
 
 log "Generating Talos configuration..."
@@ -982,34 +784,30 @@ talosctl gen config \
     --install-disk "${INSTALL_DISK}" \
     --additional-sans "${MASTER_HOST}"
 
-
 # ============================================================
 # HOSTNAME PATCHES
 # ============================================================
 
-cat > "${CONFIG_DIR}/master-patch.yaml" <<EOF
+cat > "${CONFIG_DIR}/master-patch.yaml" <<'EOF'
 machine:
   network:
     hostname: k8s-master
 EOF
 
-
-cat > "${CONFIG_DIR}/worker-01-patch.yaml" <<EOF
+cat > "${CONFIG_DIR}/worker-01-patch.yaml" <<'EOF'
 machine:
   network:
     hostname: k8s-worker-01
 EOF
 
-
-cat > "${CONFIG_DIR}/worker-02-patch.yaml" <<EOF
+cat > "${CONFIG_DIR}/worker-02-patch.yaml" <<'EOF'
 machine:
   network:
     hostname: k8s-worker-02
 EOF
 
-
 # ============================================================
-# PATCH CONFIGURATIONS
+# PATCH CONTROL PLANE
 # ============================================================
 
 log "Patching control-plane configuration..."
@@ -1019,6 +817,9 @@ talosctl machineconfig patch \
     --patch "@${CONFIG_DIR}/master-patch.yaml" \
     -o "${CONFIG_DIR}/master.yaml"
 
+# ============================================================
+# PATCH WORKER 01
+# ============================================================
 
 log "Patching worker 01 configuration..."
 
@@ -1027,6 +828,9 @@ talosctl machineconfig patch \
     --patch "@${CONFIG_DIR}/worker-01-patch.yaml" \
     -o "${CONFIG_DIR}/worker-01.yaml"
 
+# ============================================================
+# PATCH WORKER 02
+# ============================================================
 
 log "Patching worker 02 configuration..."
 
@@ -1035,28 +839,8 @@ talosctl machineconfig patch \
     --patch "@${CONFIG_DIR}/worker-02-patch.yaml" \
     -o "${CONFIG_DIR}/worker-02.yaml"
 
-
 # ============================================================
-# VALIDATE CONFIG
-# ============================================================
-
-log "Validating Talos configuration..."
-
-talosctl validate \
-    --config "${CONFIG_DIR}/master.yaml" \
-    --mode cloud
-
-talosctl validate \
-    --config "${CONFIG_DIR}/worker-01.yaml" \
-    --mode cloud
-
-talosctl validate \
-    --config "${CONFIG_DIR}/worker-02.yaml" \
-    --mode cloud
-
-
-# ============================================================
-# APPLY CONTROL PLANE
+# APPLY CONTROL PLANE CONFIG
 # ============================================================
 
 log "Applying control-plane configuration..."
@@ -1066,9 +850,8 @@ talosctl apply-config \
     --nodes "${MASTER_IP}" \
     --file "${CONFIG_DIR}/master.yaml"
 
-
 # ============================================================
-# APPLY WORKERS
+# APPLY WORKER 01 CONFIG
 # ============================================================
 
 log "Applying worker 01 configuration..."
@@ -1078,6 +861,9 @@ talosctl apply-config \
     --nodes "${WORKER1_IP}" \
     --file "${CONFIG_DIR}/worker-01.yaml"
 
+# ============================================================
+# APPLY WORKER 02 CONFIG
+# ============================================================
 
 log "Applying worker 02 configuration..."
 
@@ -1086,15 +872,13 @@ talosctl apply-config \
     --nodes "${WORKER2_IP}" \
     --file "${CONFIG_DIR}/worker-02.yaml"
 
-
 # ============================================================
 # CONFIGURE TALOSCTL
 # ============================================================
 
 export TALOSCONFIG="${CONFIG_DIR}/talosconfig"
 
-
-log "Configuring talosctl endpoint..."
+log "Configuring talosctl..."
 
 talosctl config endpoint \
     "${MASTER_IP}"
@@ -1102,40 +886,45 @@ talosctl config endpoint \
 talosctl config node \
     "${MASTER_IP}"
 
-
 # ============================================================
-# WAIT FOR REBOOT / INSTALLATION
+# WAIT FOR TALOS INSTALLATION
 # ============================================================
 
-log "Talos is now installing to the VM disks."
+log "Talos is installing to the VM disks."
 
-log "Waiting for the control plane to return..."
+log "Waiting for the control plane to reboot..."
 
 sleep 20
 
+# ============================================================
+# WAIT FOR TALOS AGAIN
+# ============================================================
+
+wait_for_port \
+    "${MASTER_IP}" \
+    50000 \
+    "Talos control plane API after installation"
 
 # ============================================================
 # HEALTH CHECK
 # ============================================================
 
-log "Checking Talos cluster health..."
+log "Checking Talos health..."
 
 talosctl health \
     --nodes "${MASTER_IP}" \
     --endpoints "${MASTER_IP}" \
     --wait-timeout 10m
 
-
 # ============================================================
-# BOOTSTRAP ETCD
+# BOOTSTRAP ETCD / KUBERNETES
 # ============================================================
 
-log "Bootstrapping etcd..."
+log "Bootstrapping Kubernetes..."
 
 talosctl bootstrap \
     --nodes "${MASTER_IP}" \
     --endpoints "${MASTER_IP}"
-
 
 # ============================================================
 # WAIT FOR KUBERNETES
@@ -1145,9 +934,8 @@ log "Waiting for Kubernetes control plane..."
 
 sleep 30
 
-
 # ============================================================
-# GET KUBECONFIG
+# RETRIEVE KUBECONFIG
 # ============================================================
 
 log "Retrieving kubeconfig..."
@@ -1163,7 +951,6 @@ chmod 600 "${KUBECONFIG}"
 
 export KUBECONFIG="${KUBECONFIG}"
 
-
 # ============================================================
 # WAIT FOR KUBERNETES NODES
 # ============================================================
@@ -1172,45 +959,53 @@ log "Waiting for Kubernetes nodes..."
 
 for ((i=1; i<=120; i++)); do
 
-    if kubectl get nodes >/dev/null 2>&1; then
+    NODE_COUNT="$(
+        kubectl get nodes \
+            --no-headers \
+            2>/dev/null |
+            wc -l
+    )"
 
-        NODE_COUNT="$(kubectl get nodes --no-headers 2>/dev/null | wc -l)"
-
-        if [[ "${NODE_COUNT}" -ge 3 ]]; then
-            break
-        fi
-
+    if [[ "${NODE_COUNT}" -ge 3 ]]; then
+        break
     fi
+
+    echo "  Kubernetes nodes available: ${NODE_COUNT}/3"
 
     sleep 5
 
 done
 
-
 # ============================================================
-# FINAL HEALTH CHECK
+# FINAL NODE STATUS
 # ============================================================
 
-log "Final Kubernetes node status..."
+echo
+echo "============================================================"
+echo "Kubernetes nodes"
+echo "============================================================"
+echo
 
 kubectl get nodes -o wide
 
+echo
 
 # ============================================================
-# CHECK ALL THREE NODES
+# VERIFY
 # ============================================================
 
-NODE_COUNT="$(kubectl get nodes --no-headers | wc -l)"
+NODE_COUNT="$(
+    kubectl get nodes \
+        --no-headers |
+        wc -l
+)"
 
 if [[ "${NODE_COUNT}" -lt 3 ]]; then
 
-    warn "Less than three Kubernetes nodes are registered."
+    warn "Expected 3 Kubernetes nodes, but found ${NODE_COUNT}."
 
     echo
-    kubectl get nodes -o wide
-    echo
-
-    echo "You can inspect the cluster with:"
+    echo "Check with:"
     echo
     echo "  export KUBECONFIG=${KUBECONFIG}"
     echo "  kubectl get nodes"
@@ -1221,7 +1016,6 @@ else
     log "All three Kubernetes nodes are registered."
 
 fi
-
 
 # ============================================================
 # FINAL OUTPUT
@@ -1264,18 +1058,14 @@ echo "  ${KUBECONFIG}"
 echo
 echo "============================================================"
 echo
-echo "To use the cluster:"
+echo "Use Kubernetes:"
 echo
 echo "  export KUBECONFIG=${KUBECONFIG}"
-echo
 echo "  kubectl get nodes"
 echo
-echo "To use talosctl:"
+echo "Use Talos:"
 echo
 echo "  export TALOSCONFIG=${CONFIG_DIR}/talosconfig"
-echo
-echo "  talosctl version"
-echo
 echo "  talosctl health"
 echo
 echo "============================================================"
